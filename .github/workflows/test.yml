@@ -21,4 +21,4 @@ jobs:
       -
         name: Test ${{matrix.worker}}-${{ matrix.pkg }}
         run: |
-            echo test worker=${{worker}} pkg=${{pkg}} flags="-v ${{flags}}"
+            echo test worker=${{matrix.worker}} pkg=${{matrix.pkg}} flags="-v ${{matrix.flags}}"
