@@ -1,0 +1,27 @@
+#!/bin/bash
+
+shopt -s nullglob
+if [[ ! -d $HOME/.cache/pyenv ]]; then
+    git clone https://github.com/pyenv/pyenv.git $HOME/.cache/pyenv
+fi
+
+cd .cache/pyenv/plugins/python-build/share/python-build
+
+# sort the latest version of each major release first
+for ver in 3.9 3.8 3.7 3.6 2.7 3.5 3.4 3.3; do
+    for subver in $(ls -d -1 $ver.* | sort -Vr); do
+        if [[ $subver =~ ^(2[.]7[.]([0-9]+)|3[.][3-9][.]([0-9]+))$ ]]; then
+            echo $subver || break
+            break
+        fi
+    done
+done
+
+# now return the rest of the versions
+for ver in 3.9 3.8 3.7 3.6 2.7 3.5 3.4 3.3; do
+    for subver in $(ls -d -1 $ver.* | sort -Vr | tail +2); do
+        if [[ $subver =~ ^(2[.]7[.]([0-9]+)|3[.][3-9][.]([0-9]+))$ ]]; then
+            echo $subver || break
+        fi
+    done
+done

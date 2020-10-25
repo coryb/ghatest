@@ -1,0 +1,453 @@
+#!/bin/bash
+set -xeu
+
+cd "$(dirname "$0")"
+
+# min target is mojave for macOS
+MACOS_TARGET_VERSION=10.14
+
+XZVER=5.2.4
+ZLIBVER=1.2.11
+GETTEXTVER=0.21
+NCURSESVER=6.1
+READLINEVER=8.0
+GDBMVER=1.18.1
+BZIP2VER=1.0.8
+SQLITEVER=3330000
+LIBFFIVER=3.2.1
+OPENSSL10VER=1.0.2o
+OPENSSL11VER=1.1.0h
+OPENSSLVER=$OPENSSL11VER
+PYTHONVER=
+PLATFORM=$(uname -s)
+
+function usage {
+    code=$1
+    [[ $code == 0 ]] && out=1 || out=2
+    cat <<EOF >&$out
+Usage: $0 [options] [arguments]
+Options:
+  -h | --help
+  --py=version (default=$PYTHONVER)
+Arguments:
+  xz[=ver] (default=$XZVER)
+  zlib[=ver] (default=$ZLIBVER)
+  gettext[=ver] (default=$GETTEXTVER)
+  ncurses[=ver] (default=$NCURSESVER)
+  readline[=ver] (default=$READLINEVER)
+  gdbm[=ver] (default=$GDBMVER)
+  bzip2[=ver] (default=$BZIP2VER)
+  sqlite[=ver] (default=$SQLITEVER)
+  libffi[=ver] (default=$LIBFFIVER)
+  openssl[=ver] (default=$OPENSSL11VER)
+  python
+  all
+EOF
+    exit $code
+}
+
+function extractVersion {
+    input="$1"
+    dflt="$2"
+    case "$input" in
+    *=*)
+        echo "${input#*=}";;
+    *) echo "$dflt";;
+    esac
+}
+function setupEnv {
+    # setup defaults for Openssl
+    case $PYTHONVER in
+        # older python can't handle openssl-1.1
+        2.7.[0-9] | 2.7.1[0-2] | 3.3.* | 3.4.* | 3.5.[012])
+            OPENSSLVER=$OPENSSL10VER;;
+    esac
+
+    export WORKSPACE="$(pwd)"
+    export BUILDDIR="$WORKSPACE/build-tmp"
+    mkdir -p "$BUILDDIR"
+    pad=0123456789
+    paddir=$pad$pad$pad$pad$pad$pad$pad$pad$pad$pad$pad$pad$pad$pad$pad
+    # add a 100 char buffer in there, we need to pad for when installing to
+    # workspaces with really long paths (jenkins) it does not overflow our
+    # internal compiled path
+    pyenvDir="$WORKSPACE/$paddir/$paddir/pyenv"
+    if [[ ! -d $pyenvDir ]]; then
+        git clone https://github.com/pyenv/pyenv.git "$pyenvDir"
+    fi
+    export INSTALLDIR="$pyenvDir/versions/$PYTHONVER"
+
+    mkdir -p $WORKSPACE/stubs
+    # prevent brew from being used during the build so that we don't contaminate
+    # the python build with local brew packages
+    ln -sf /usr/bin/true $WORKSPACE/stubs/brew
+
+    export PATH="$WORKSPACE/stubs:$pyenvDir/bin:$INSTALLDIR/.deps/bin:$PATH"
+    export PYENV_ROOT="$pyenvDir"
+
+    mkdir -p "$INSTALLDIR"
+
+    # python 3.7 required pkg-config to work now
+    export PKG_CONFIG_PATH="$INSTALLDIR/.deps/lib/pkgconfig"
+    export CFLAGS="-I$INSTALLDIR/.deps/include"
+    export CPPFLAGS="-I$INSTALLDIR/.deps/include"
+    export LDFLAGS="-L$INSTALLDIR/.deps/lib -Wl,-rpath,$INSTALLDIR/.deps/lib" 
+    if [[ $PLATFORM == Darwin ]]; then
+        export CFLAGS="-mmacosx-version-min=$MACOS_TARGET_VERSION $CFLAGS"
+        export CPPFLAGS="-mmacosx-version-min=$MACOS_TARGET_VERSION $CPPFLAGS"
+        export LDFLAGS="-mmacosx-version-min=$MACOS_TARGET_VERSION $LDFLAGS"
+    else
+        # prefer static linking of libstdc++ to minimize deps requires to run python
+        export LDFLAGS="-static-libstdc++ $LDFLAGS"
+    fi
+}
+
+function main {
+    while [[ $# > 0 ]]; do
+        case "$1" in
+            -h | --help) usage 0;;
+            --py=*)
+                PYTHONVER=$(extractVersion "$1" "$PYTHONVER")
+                setupEnv
+                shift;;
+            --py)
+                PYTHONVER="$2"
+                setupEnv
+                shift 2;;
+            xz | xz=*)
+                export XZVER=$(extractVersion "$1" "$XZVER")
+                shift
+                xz;;
+            zlib | zlib=*)
+                export ZLIBVER=$(extractVersion "$1" "$ZLIBVER")
+                shift
+                zlib;;
+            gettext | gettext=*)
+                export GETTEXTVER=$(extractVersion "$1" "$GETTEXTVER")
+                shift
+                gettext;;
+            ncurses | ncurses=*)
+                export NCURSESVER=$(extractVersion "$1" "$NCURSESVER")
+                shift
+                ncurses;;
+            readline | readline=*)
+                export READLINEVER=$(extractVersion "$1" "$READLINEVER")
+                shift
+                readline;;
+            gdbm | gdbm=*)
+                export GDBMVER=$(extractVersion "$1" "$GDBMVER")
+                shift
+                gdbm;;
+            bzip2 | bzip2=*)
+                export BZIP2VER=$(extractVersion "$1" "$BZIP2VER")
+                shift
+                bzip2;;
+            sqlite | sqlite=*)
+                export SQLITEVER=$(extractVersion "$1" "$SQLITEVER")
+                shift
+                sqlite;;
+            libffi | libffi=*)
+                export LIBFFIVER=$(extractVersion "$1" "$LIBFFIVER")
+                shift
+                libffi;;
+            openssl | openssl=*)
+                export OPENSSLVER=$(extractVersion "$1" "$OPENSSLVER")
+                shift
+                openssl;;
+            python)
+                shift
+                python;;
+            all)
+                shift
+                xz
+                zlib
+                gettext
+                ncurses
+                readline
+                gdbm
+                bzip2
+                sqlite
+                libffi
+                openssl
+                python
+                ;;
+            *) usage 1;;
+        esac
+    done
+}
+
+# build and install libxz
+function xz {
+    rm -rf $BUILDDIR/xz-$XZVER
+    curl -sL -f -S https://tukaani.org/xz/xz-$XZVER.tar.gz -o - | tar xzf - -C $BUILDDIR
+    pushd $BUILDDIR/xz-$XZVER
+    configureInstall
+    popd
+}
+
+# build/install zlib
+function zlib {
+    rm -rf $BUILDDIR/zlib-$ZLIBVER
+    curl -sL -f -S https://github.com/madler/zlib/archive/v$ZLIBVER.tar.gz -o - | tar xzf - -C $BUILDDIR
+    pushd $BUILDDIR/zlib-$ZLIBVER
+    configureInstall
+    popd
+}
+
+function gettext {
+    rm -rf $BUILDDIR/gettext-$GETTEXTVER
+    curl -sL -f -S https://ftp.gnu.org/gnu/gettext/gettext-$GETTEXTVER.tar.gz -o - | tar xzf - -C $BUILDDIR
+    pushd $BUILDDIR/gettext-$GETTEXTVER
+    configureInstall \
+        --disable-dependency-tracking \
+        --disable-silent-rules \
+        --disable-debug \
+        --with-included-gettext \
+        gl_cv_func_ftello_works=yes \
+        --with-included-glib \
+        --with-included-libcroco \
+        --with-included-libunistring \
+        --disable-java \
+        --disable-csharp \
+        --without-git \
+        --without-cvs \
+        --without-xz
+    popd
+}
+
+function gdbm {
+    rm -rf $BUILDDIR/gdbm-$GDBMVER
+    curl -sL -f -S https://ftp.gnu.org/gnu/gdbm/gdbm-$GDBMVER.tar.gz -o - | tar xzf - -C $BUILDDIR
+    pushd $BUILDDIR/gdbm-$GDBMVER
+    configureInstall \
+        --disable-dependency-tracking \
+        --disable-silent-rules \
+        --enable-libgdbm-compat
+    popd
+}
+
+# build/install ncurses (required for readline)
+function ncurses {
+    rm -rf $BUILDDIR/ncurses-$NCURSESVER
+    curl -sL -f -S https://ftp.gnu.org/pub/gnu/ncurses/ncurses-$NCURSESVER.tar.gz -o - | tar xzf - -C $BUILDDIR
+    pushd $BUILDDIR/ncurses-$NCURSESVER
+    configureInstall --with-shared --with-default-terminfo-dir=/usr/share/terminfo
+    popd
+}
+
+function readline {
+    # build/install readline
+    rm -rf $BUILDDIR/readline-$READLINEVER
+    curl -sL -f -S ftp://ftp.cwru.edu/pub/bash/readline-$READLINEVER.tar.gz -o - | tar xzf - -C $BUILDDIR
+    pushd $BUILDDIR/readline-$READLINEVER
+    configureInstall --with-curses
+    popd
+}
+
+function bzip2 {
+    # build/install bzip2
+    rm -rf $BUILDDIR/bzip2-$BZIP2VER
+    curl -sL -f -S https://fossies.org/linux/misc/bzip2-$BZIP2VER.tar.gz -o - | tar xzf - -C $BUILDDIR
+    pushd $BUILDDIR/bzip2-$BZIP2VER
+    if [[ $PLATFORM == Darwin ]]; then
+        perl -pi -e "s/-Wl,-soname -Wl,libbz2.so.1.0 -o libbz2.so.$BZIP2VER/\\\$(LDFLAGS) -dynamiclib -install_name libbz2.1.dylib -current_version $BZIP2VER -compatibility_version 1.0 -o libbz2.1.dylib/" Makefile-libbz2_so
+        perl -pi -e "s/libbz2.so.$BZIP2VER/libbz2.1.dylib/g" Makefile-libbz2_so
+    fi
+    make -f Makefile-libbz2_so
+    make install PREFIX="$INSTALLDIR/.deps"
+    if [[ $PLATFORM == Linux ]]; then
+        cp libbz2.so.1.0 libbz2.so.$BZIP2VER "$INSTALLDIR/.deps/lib/."
+        ln -s libbz2.so.1.0 "$INSTALLDIR/.deps/lib/libbz2.so"
+    else
+        cp libbz2.1.dylib "$INSTALLDIR/.deps/lib/."
+    fi
+    popd
+}
+
+# build/install sqlite3
+function sqlite {
+    rm -rf $BUILDDIR/sqlite-autoconf-$SQLITEVER
+    curl -sL -f -S https://www3.sqlite.org/2020/sqlite-autoconf-$SQLITEVER.tar.gz -o - | tar xzf - -C $BUILDDIR
+    pushd $BUILDDIR/sqlite-autoconf-$SQLITEVER
+    configureInstall
+    popd
+}
+
+# build/install libffi
+function libffi {
+    rm -rf $BUILDDIR/libffi-$LIBFFIVER
+    curl -sL -f -S https://github.com/libffi/libffi/archive/v$LIBFFIVER.tar.gz -o - | tar xzf - -C $BUILDDIR
+    pushd $BUILDDIR/libffi-$LIBFFIVER
+    # fix install dir for headers
+    perl -pi -e 's/^includesdir.*/includesdir = \$(includedir)/' include/Makefile.am
+    perl -pi -e 's/^includedir=.*/includedir=\@includedir@/' libffi.pc.in
+    ./autogen.sh
+    configureInstall
+    popd
+}
+
+function configureInstall {
+    ./configure --prefix="$INSTALLDIR/.deps" "$@"
+    make install
+}
+
+# # build/install openssl
+# case $VERSION in
+#     # older python can't handle openssl-1.1
+#     2.7.[0-9] | 2.7.1[0-2] | 3.3.* | 3.4.* | 3.5.[012])
+function openssl {
+    rm -rf $BUILDDIR/openssl-$OPENSSLVER
+    curl -sL -f -S https://www.openssl.org/source/openssl-$OPENSSLVER.tar.gz -o - | tar xzf - -C $BUILDDIR
+    pushd $BUILDDIR/openssl-$OPENSSLVER
+    case $OPENSSLVER in
+    1.0.*)
+        arch=linux-x86_64
+        if [[ $PLATFORM == Darwin ]]; then
+            arch=darwin64-x86_64-cc
+        fi
+        perl ./Configure "$arch" shared --prefix="$INSTALLDIR/.deps" "-Wl,-rpath,$INSTALLDIR/.deps/lib"
+        ;;
+    1.1.*)
+        ./config shared --prefix="$INSTALLDIR/.deps" "-Wl,-rpath,$INSTALLDIR/.deps/lib"
+        ;;
+    esac
+    make install
+    popd
+}
+
+function python {
+    # we will install our own dependencies
+    perl -pi -e '!/Python-/ && s/^install_package.*//' "$pyenvDir/plugins/python-build/share/python-build/$PYTHONVER"
+
+    export PYTHON_CONFIGURE_OPTS=
+
+    case $PYTHONVER in
+        2.7.[0123457] | 3.3.* | 3.4.[01])
+            echo "Skipping shared python, build fails with option";;
+        2.7.* | 3.4.* | 3.5.* | 3.6.* | 3.7.*)
+            export PYTHON_CONFIGURE_OPTS="$PYTHON_CONFIGURE_OPTS --enable-shared";;
+    esac
+
+    if [[ $PLATFORM == Linux ]]; then
+        export PYTHONIOENCODING=utf-8
+        export PYTHON_CONFIGURE_OPTS="$PYTHON_CONFIGURE_OPTS --enable-ipv6 --with-fpectl"
+
+        case $PYTHONVER in
+            3.*)
+                export PYTHON_CONFIGURE_OPTS="$PYTHON_CONFIGURE_OPTS --enable-loadable-sqlite-extensions --without-dtrace";;
+            2.7.*)
+                export PYTHON_CONFIGURE_OPTS="$PYTHON_CONFIGURE_OPTS --enable-unicode=ucs4";;
+        esac
+    fi
+
+    # dont compile if it already exists
+    if [[ ! -e $INSTALLDIR/bin/python ]]; then
+        pyenv install --verbose "$PYTHONVER" --keep
+    fi
+    setupRelocateScript
+    bundlePython
+}
+
+function setupRelocateScript {
+    cp relocate "$INSTALLDIR/.relocate"
+    perl -pi -e "s{##VERSION##}{$PYTHONVER}" "$INSTALLDIR/.relocate"
+    perl -pi -e "s{##INSTALLDIR##}{$INSTALLDIR}" "$INSTALLDIR/.relocate"
+}
+
+function bundlePython {
+    cd "$INSTALLDIR"
+
+    # some versions of python (3.7.0) were missing some bin/python symlinks so we need to fill in the blanks here
+    ls -l bin/python*
+
+    minorver=${PYTHONVER%.*}
+    majorver=${PYTHONVER:0:1}
+
+    realbin=
+    for binfile in python python${majorver} python${minorver} python${majorver}m python${minorver}m; do
+        if [[ -f bin/$binfile && ! -L bin/$binfile ]]; then
+            realbin=$binfile
+        fi
+    done
+
+    for binfile in python python${majorver} python${minorver}; do
+        if [[ ! -L bin/$binfile && ! -f bin/$binfile ]]; then
+            ln -s $realbin bin/$binfile
+        fi
+    done
+
+    files=(* .relocate)
+    if [[ $PLATFORM == Linux ]]; then
+        # we expect the library links below from the base system, we should get
+        # nothing out of /usr/lib or /usr/local/lib.
+        #
+        #   /lib64/ld-linux-x86-64.so.2
+        #   libcrypt.so.1 => /lib/x86_64-linux-gnu/libcrypt.so.1
+        #   libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6
+        #   libdl.so.2 => /lib/x86_64-linux-gnu/libdl.so.2
+        #   libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6
+        #   libnsl.so.1 => /lib/x86_64-linux-gnu/libnsl.so.1
+        #   libpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0
+        #   librt.so.1 => /lib/x86_64-linux-gnu/librt.so.1
+        #   libutil.so.1 => /lib/x86_64-linux-gnu/libutil.so.1
+        #   linux-vdso.so.1
+        ignoreRx="ld-linux-x86-64[.]so[.]2|linux-vdso[.]so[.]1|/lib/x86_64-linux-gnu|not a dynamic executable|statically linked"
+        badLinks=$(find "$INSTALLDIR/lib" "$INSTALLDIR/bin" -type f -perm -u+x -print0 | xargs -0 ldd | grep -v $INSTALLDIR | grep -vE "$ignoreRx" | sort | awk -F'(' '{print $1}' | uniq)
+        if [[ -n $badLinks ]]; then
+            echo "System libraries leaked into relocatable binary:" >&2
+            echo "$badLinks" >&2
+            exit 1
+        fi
+
+        # find all the deps that are linked from python binaries/libraries
+        for lib in $(find "$INSTALLDIR/lib" "$INSTALLDIR/bin" -type f -perm -u+x -print0 | xargs -0 ldd | grep "$INSTALLDIR/.deps/lib" | awk '{print $3}' | sort | uniq | xargs -n1 basename); do
+            files+=(".deps/lib/$lib")
+            links=( $(readlink ".deps/lib/$lib" || true) )
+            while [[ ${#links[@]} > 0 ]]; do
+                link="${links[0]}"
+                links=("${links[@]:1}")
+                files+=(".deps/lib/$link")
+                newlink=$(readlink ".deps/lib/$link" || true)
+                if [[ -n $newlink ]]; then
+                    links+=("$newlink")
+                fi
+            done
+        done
+    else
+        badLinks=$(find "$INSTALLDIR/lib" "$INSTALLDIR/bin" -type f -perm -u+x -print0 | xargs -0 otool -L 2>/dev/null | grep -v "/usr/lib/libSystem.B.dylib" | grep -v "$INSTALLDIR" | grep -v "/System/Library/Frameworks" | awk '{print $1}')
+        if [[ -n $badLinks ]]; then
+            echo "System libraries leaked into relocatable binary:" >&2
+            echo "$badLinks" >&2
+            exit 1
+        fi
+
+        # for OSX find all the deps that are linked from python binaries/libraries
+        for lib in $(find "$INSTALLDIR/lib" "$INSTALLDIR/bin" -type f -perm -u+x -print0 | xargs -0 otool -L 2>/dev/null | grep "$INSTALLDIR/.deps/lib" | awk '{print $1}' | sort | uniq | xargs -n1 basename); do
+            files+=(".deps/lib/$lib")
+            links=( $(readlink ".deps/lib/$lib" || true ) )
+            while [[ ${#links[@]} > 0 ]]; do
+                link="${links[0]}"
+                links=("${links[@]:1}")
+                files+=(".deps/lib/$link")
+                newlink=$(readlink ".deps/lib/$link" || true)
+                if [[ -n $newlink ]]; then
+                    links+=("$newlink")
+                fi
+            done
+        done
+    fi
+
+    if [[ $PLATFORM == Darwin ]]; then
+        tgz=$WORKSPACE/python-$PYTHONVER-osx$MACOS_TARGET_VERSION-amd64.tar.gz
+        tar=gtar
+    else
+        # Linux
+        tgz=$WORKSPACE/python-$PYTHONVER-linux-amd64.tar.gz
+        tar=tar
+    fi
+    rm -rf "$tgz"
+    
+    sudo "$tar" cvzf "$tgz" --exclude __pycache__ --exclude \*.pyc --exclude \*.pyo "${files[@]}"
+}
+
+main "$@"   

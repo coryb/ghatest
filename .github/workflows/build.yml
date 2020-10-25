@@ -1,0 +1,90 @@
+name: Build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    env:
+      PATH: /usr/local/opt/ccache/libexec:/usr/lib/ccache:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin
+
+    runs-on: ${{matrix.os}}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        pyver: ["3.9.0"]
+
+    steps:
+    - uses: actions/checkout@v2
+    - name: setup-host
+      run: ./setup
+    - name: Get ccache directory
+      id: ccache
+      run: |
+          echo "::set-output name=dir::$(ccache -p | grep " cache_dir =" | awk '{print $4}')"
+    - uses: actions/cache@v2
+      with:
+        path: ${{ steps.ccache.outputs.dir }}
+        key: ${{ runner.os }}-${{ hashFiles('.github/workflows/build.yml') }}-ccache
+    - name: Build xz
+      run: ./build --py ${{ matrix.pyver }} xz
+    - name: Debug Build xz
+      run: cat ./build-tmp/xz-*/config.log
+      if: ${{ failure() }}
+    - name: Build zlib
+      run: ./build --py ${{ matrix.pyver }} zlib
+    - name: Debug Build zlib
+      run: cat ./build-tmp/zlib-*/config.log
+      if: ${{ failure() }}
+    - name: Build gettext
+      run: ./build --py ${{ matrix.pyver }} gettext
+    - name: Debug Build gettext
+      run: cat ./build-tmp/gettext-*/config.log
+      if: ${{ failure() }}
+    - name: Build ncurses
+      run: ./build --py ${{ matrix.pyver }} ncurses
+    - name: Debug Build ncurses
+      run: cat ./build-tmp/ncurses-*/config.log
+      if: ${{ failure() }}
+    - name: Build readline
+      run: ./build --py ${{ matrix.pyver }} readline
+    - name: Debug Build readline
+      run: cat ./build-tmp/readline-*/config.log
+      if: ${{ failure() }}
+    - name: Build gdbm
+      run: ./build --py ${{ matrix.pyver }} gdbm
+    - name: Debug Build gdbm
+      run: cat ./build-tmp/gdbm-*/config.log
+      if: ${{ failure() }}
+    - name: Build bzip2
+      run: ./build --py ${{ matrix.pyver }} bzip2
+    - name: Debug Build bzip2
+      run: cat ./build-tmp/bzip2-*/config.log
+      if: ${{ failure() }}
+    - name: Build sqlite
+      run: ./build --py ${{ matrix.pyver }} sqlite
+    - name: Debug Build sqlite
+      run: cat ./build-tmp/sqlite-*/config.log
+      if: ${{ failure() }}
+    - name: Build libffi
+      run: ./build --py ${{ matrix.pyver }} libffi
+    - name: Debug Build libffi
+      run: cat ./build-tmp/libffi-*/config.log
+      if: ${{ failure() }}
+    - name: Build openssl
+      run: ./build --py ${{ matrix.pyver }} openssl=1.1.0h
+    - name: Debug Build openssl
+      run: cat ./build-tmp/openssl-*/config.log
+      if: ${{ failure() }}
+    - name: Build python
+      run: ./build --py ${{ matrix.pyver }} python
+    - name: 'Upload Artifact'
+      uses: actions/upload-artifact@v2
+      with:
+        name: python-${{matrix.pyver}}-${{runner.os}}
+        path: ./python-${{matrix.pyver}}-*.tar.gz
+        retention-days: 90

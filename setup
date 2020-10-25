@@ -1,0 +1,15 @@
+#!/bin/bash
+set -xeu
+
+if [[ $(uname -s) == Darwin ]]; then
+    if [[ -z $(command -v gtar) || -z $(command -v ccache) || -z $(command -v autoreconf) || -z $(command -v glibtool) || -z $(command -v aclocal) || -z $(command -v pkg-config) ]]; then
+            brew install gnu-tar ccache autoconf libtool automake pkg-config jq
+    fi
+    sudo rm -rf /Library/Developer/CommandLineTools
+else
+    if [[ -z $(command -v git) || -z $(command -v ccache) || -z $(command -v autoreconf) || -z $(command -v libtool) || -z $(command -v makeinfo) || -z $(command -v aclocal) || -z $(command -v pkg-config) ]]; then
+        source /etc/lsb-release
+        for _ in 1 2 3; do sudo apt-get update && break; done
+        sudo apt-get install -y git ccache autoconf libtool-bin libltdl-dev texinfo automake pkg-config jq
+    fi
+fi

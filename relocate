@@ -1,0 +1,51 @@
+#!/bin/sh
+set -e
+
+cd "$(dirname "$0")"
+
+# this is the current path that python is installed to
+NEWPATH="$(pwd)"
+
+# this is the original path that python was built in
+OLDPATH="##INSTALLDIR##"
+
+# how many characters different are the old path from the new path (minus 1 for a '/')
+COUNTDIFF=$(( ${#OLDPATH} - ${#NEWPATH} - 1 ))
+
+if [ $COUNTDIFF -lt 0 ]; then
+  echo "Cannot relocate to $NEWPATH, path too long [$COUNTDIFF]" >&2
+  exit 1
+fi
+
+# now we create a new path with a long string of `......` in it that is a symlink back to the current
+# directory so that a valid path of the same length can be substituted
+# example:
+# oldpath=/Users/runner/work/project/0123456789/0123456789/pyenv/versions/##VERSION##
+# newpath= /Users/realuser/.cache/pyenv/versions/##VERSION##
+# hackpath=/Users/realuser/.cache/pyenv/versions/##VERSION##/........................
+
+# max file name is 255 but on encrypted file systems it is 143 so we need to make
+# sure that if our hackdir is > 143 then it is split into a subdir.
+# Use 139 since the end dir can't be '.' or '..' so we need extra room for a
+# trailing '/...' so we get 139 + 4 = 143.
+if [ $COUNTDIFF -gt 143 ]; then
+    COUNTDIFF=$(( $COUNTDIFF - 140 )) # 139 + 1 for the '/'
+    HACKDIR=$(printf "%139s/%${COUNTDIFF}s" | tr " " .)
+    mkdir -p "$(dirname "$HACKDIR")"
+    HACKLINK=".."
+else
+    HACKDIR=$(printf "%${COUNTDIFF}s" | tr " " .)
+    HACKLINK="."
+fi
+
+HACKPATH="$NEWPATH/$HACKDIR"
+
+# create symlink so that the hackpath loops back to installation directory
+ln -sf "$HACKLINK" "$HACKDIR"
+
+# monkey-patch all the files in the python distro so that any oldpath is replaced with the
+# hackpath.  This will patch text as well as binary files
+find ./* .deps -type f -print0 > .manifest
+xargs -0 -n100 perl -pi -e "s{$OLDPATH}{$HACKPATH}sg" < .manifest
+rm .manifest
+
